@@ -46,6 +46,7 @@ actual fun WebView(
                 // ============================================
                 // CONFIGURAÇÕES DE VIEWPORT E LAYOUT
                 // ============================================
+                // Configurar como navegador Chrome mobile padrão
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
                 settings.layoutAlgorithm = android.webkit.WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
@@ -135,85 +136,36 @@ actual fun WebView(
                         super.onPageFinished(view, url)
                         Log.d("WebView", "Page finished loading: $url")
 
-                        // JavaScript injection específico para Next.js
+                        // Fix definitivo: forçar main a ter altura e exibir conteúdo
                         view?.evaluateJavascript("""
                             (function() {
-                                console.log('=== Next.js WebView Initialization ===');
-                                console.log('Document ready state:', document.readyState);
-                                console.log('Body exists:', !!document.body);
+                                // Esperar React terminar de renderizar
+                                setTimeout(() => {
+                                    const main = document.querySelector('main');
+                                    if (main) {
+                                        // Forçar main a ter altura maior (aumentei de 300px para 700px)
+                                        main.style.minHeight = '1000px';
+                                        main.style.maxHeight = '1000px';
+                                        main.style.height = 'auto';
+                                        main.style.flex = '1';
+                                        main.style.display = 'flex';
+                                        main.style.flexDirection = 'column';
 
-                                // Detecta se é Next.js
-                                var isNextJs = window.__NEXT_DATA__ !== undefined;
-                                console.log('Is Next.js app:', isNextJs);
-
-                                if (isNextJs) {
-                                    console.log('Next.js version:', window.__NEXT_DATA__.buildId || 'unknown');
-                                }
-
-                                // Aguarda hidratação do Next.js/React completar
-                                function waitForNextJsHydration() {
-                                    var attempts = 0;
-                                    var maxAttempts = 30; // 6 segundos (30 x 200ms)
-                                    var lastElementCount = 0;
-                                    var stableCount = 0;
-
-                                    function check() {
-                                        attempts++;
-                                        var currentElementCount = document.getElementsByTagName('*').length;
-
-                                        console.log('Hydration check ' + attempts + '/' + maxAttempts + ': ' + currentElementCount + ' elements');
-
-                                        // Verifica se a contagem de elementos está estável
-                                        if (currentElementCount === lastElementCount) {
-                                            stableCount++;
-                                        } else {
-                                            stableCount = 0;
-                                            lastElementCount = currentElementCount;
+                                        // Forçar primeiro filho do main a aparecer (aumentei de 200px para 600px)
+                                        const firstChild = main.firstElementChild;
+                                        if (firstChild) {
+                                            firstChild.style.display = 'block';
+                                            firstChild.style.minHeight = '600px';
+                                            firstChild.style.flex = '1';
                                         }
 
-                                        // Se estável por 3 checks consecutivos (600ms), considera completo
-                                        if (stableCount >= 3) {
-                                            console.log('Next.js hydration complete! Elements:', currentElementCount);
-
-                                            // Força repaint final
-                                            window.scrollBy(0, 1);
-                                            window.scrollBy(0, -1);
-
-                                            // Dispara evento customizado para sinalizar que está pronto
-                                            if (typeof window.ReactNativeWebView !== 'undefined') {
-                                                window.ReactNativeWebView.postMessage('HYDRATION_COMPLETE');
-                                            }
-                                            return;
-                                        }
-
-                                        if (attempts >= maxAttempts) {
-                                            console.warn('Next.js hydration timeout - forcing render');
-                                            window.scrollBy(0, 1);
-                                            window.scrollBy(0, -1);
-                                            return;
-                                        }
-
-                                        // Continua verificando
-                                        setTimeout(check, 200);
+                                        console.log('[FIX] Main height:', main.clientHeight, 'First child:', firstChild?.tagName);
+                                    } else {
+                                        console.error('[FIX] Main não encontrado!');
                                     }
-
-                                    check();
-                                }
-
-                                // Aguarda um pouco para Next.js começar a hidratar
-                                if (isNextJs) {
-                                    // Para Next.js, aguarda mais tempo antes de começar a verificar
-                                    setTimeout(waitForNextJsHydration, 500);
-                                } else {
-                                    // Para outros apps React, começa mais cedo
-                                    setTimeout(waitForNextJsHydration, 300);
-                                }
-
-                                return 'OK';
+                                }, 1000);
                             })();
-                        """.trimIndent()) { result ->
-                            Log.d("WebView", "JavaScript injection result: $result")
-                        }
+                        """.trimIndent(), null)
 
                         onLoadingChange?.invoke(false)
                     }
@@ -221,11 +173,6 @@ actual fun WebView(
                     override fun onPageCommitVisible(view: WebView?, url: String?) {
                         super.onPageCommitVisible(view, url)
                         Log.d("WebView", "Page became visible: $url")
-
-                        // Força um repaint quando a página se torna visível
-                        view?.postDelayed({
-                            view.invalidate()
-                        }, 100)
                     }
 
                     override fun onReceivedError(
@@ -234,12 +181,7 @@ actual fun WebView(
                         error: WebResourceError?
                     ) {
                         super.onReceivedError(view, request, error)
-                        // Log apenas para main frame, ignore erros de recursos
-                        if (request?.isForMainFrame == true) {
-                            Log.e("WebView", "Error loading main frame: ${request.url} - ${error?.description}")
-                        } else {
-                            Log.w("WebView", "Error loading resource: ${request?.url}")
-                        }
+                        Log.e("WebViewError", "URL: ${request?.url}, Error: ${error?.description}, ErrorCode: ${error?.errorCode}")
                     }
 
                     override fun shouldOverrideUrlLoading(
@@ -255,10 +197,13 @@ actual fun WebView(
                 webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                         consoleMessage?.let {
-                            Log.d(
-                                "WebViewConsole",
-                                "${it.message()} -- From line ${it.lineNumber()} of ${it.sourceId()}"
-                            )
+                            // Log apenas erros críticos
+                            if (it.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                                Log.e(
+                                    "WebViewJS",
+                                    "[${it.sourceId()}:${it.lineNumber()}] ${it.message()}"
+                                )
+                            }
                         }
                         return true
                     }
